@@ -2,22 +2,26 @@ package kafka
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"math"
+	"os"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 const (
-	brokerAddr = "localhost:9092" // broker address
-	topic      = "orders"         // kafka topic
-
+	topic       = "orders" // kafka topic
 	partitions  = int32(3) // number of partitions
 	replication = int16(1) // replication factor
 )
 
 type Service interface {
+	// IsReady checks if Kafka is ready to accept connections (with exponential backoff)
+	IsReady(ctx context.Context) error
 	// CreateTopic will create new kafka topic if it does not already exists
 	CreateTopic(ctx context.Context) error
 	// SendEvent sends the given message to kafka topic
@@ -32,6 +36,12 @@ type service struct {
 }
 
 func NewService() Service {
+	// get broker address from the environment
+	brokerAddr, exists := os.LookupEnv("KAFKA_BROKER")
+	if !exists {
+		panic("Missing key 'KAFKA_BROKER' from environment")
+	}
+
 	// Create kafka client
 	client, err := kgo.NewClient(
 		kgo.SeedBrokers(brokerAddr),
@@ -47,6 +57,48 @@ func NewService() Service {
 	return service{
 		admin:  admin,
 		client: client,
+	}
+}
+
+func (s service) IsReady(ctx context.Context) error {
+	var attempt int
+	const maxAttempts = 10
+	const baseDelay = time.Second // initial delay of 1s
+
+	for {
+		attempt++
+
+		// Try to get cluster metadata to verify connectivity
+		_, err := s.admin.BrokerMetadata(ctx)
+		if err == nil {
+			log.Println("Kafka connection established successfully.")
+			return nil
+		}
+
+		// If context was canceled, stop retrying
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return fmt.Errorf("Kafka readiness check canceled: %w", ctx.Err())
+		}
+
+		// If max attempts exceeded, fail
+		if attempt >= maxAttempts {
+			return fmt.Errorf("Kafka not ready after %d attempts: %w", attempt, err)
+		}
+
+		// Exponential backoff with jitter
+		backoff := time.Duration(float64(baseDelay) * math.Pow(2, float64(attempt-1)))
+		backoff = min(backoff, 30*time.Second) // cap backoff to 30s
+		log.Printf(
+			"Kafka not ready (attempt %d/%d): %v. Retrying in %v...",
+			attempt, maxAttempts, err, backoff,
+		)
+
+		select {
+		case <-time.After(backoff):
+			continue
+		case <-ctx.Done():
+			return fmt.Errorf("Kafka readiness check canceled: %w", ctx.Err())
+		}
 	}
 }
 

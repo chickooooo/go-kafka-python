@@ -14,8 +14,16 @@ func main() {
 	// Initialize kafka service
 	kafkaService := kafka.NewService()
 	defer kafkaService.Close()
+
+	// Check if kafka is ready
+	if err := kafkaService.IsReady(ctx); err != nil {
+		log.Fatalf("Kafka not ready: %v", err)
+	}
+
 	// Create new topic
-	kafkaService.CreateTopic(ctx)
+	if err := kafkaService.CreateTopic(ctx); err != nil {
+		log.Fatalf("failed to create topic: %v\n", err)
+	}
 
 	// Initialize handlers
 	handlers := NewHandlers(kafkaService)
