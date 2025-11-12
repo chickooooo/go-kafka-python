@@ -46,7 +46,6 @@ services:
       - KAFKA_BROKER=broker:9092
     networks:
       - default
-    restart: on-failure
 
   python-consumer:
     build:
@@ -60,7 +59,6 @@ services:
       - KAFKA_BROKER=broker:9092
     networks:
       - default
-    restart: on-failure
 
 networks:
   default:
